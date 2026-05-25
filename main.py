@@ -15,12 +15,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = MongoClient(os.environ.get("MONGODB_URI"))
+MONGODB_URI = os.environ.get("MONGODB_URI", "")
+client = MongoClient(MONGODB_URI)
 db = client["smarttrip"]
-
-# ── MODÈLES ──────────────────────────────────────────────────────────────────
-# Valeurs par défaut permissives — la validation des coordonnées se fait
-# côté Android avant l'envoi, pas côté API (évite les rejets 422)
 
 class LocationModel(BaseModel):
     latitude: float = 0.0
@@ -60,11 +57,9 @@ class PhotoModel(BaseModel):
     photo_base64: str
     recorded_at: Optional[str] = None
 
-# ── ENDPOINTS ─────────────────────────────────────────────────────────────────
-
 @app.get("/")
 def root():
-    return {"status": "SmartTrip API running"}
+    return {"status": "SmartTrip API running", "version": "1.0"}
 
 @app.post("/gps")
 def save_gps(data: GpsDataModel):
