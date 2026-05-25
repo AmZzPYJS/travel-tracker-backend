@@ -8,6 +8,7 @@ from datetime import datetime
 
 app = FastAPI(title="SmartTrip API")
 
+# CORS corrigé
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,8 +17,14 @@ app.add_middleware(
 )
 
 MONGODB_URI = os.environ.get("MONGO_URL", "")
+
 client = MongoClient(MONGODB_URI)
-db = client["smarttrip"]
+
+# IMPORTANT :
+# Tes anciens voyages sont dans la base "travel_tracker"
+# donc il faut utiliser cette base, pas "smarttrip"
+db = client["travel_tracker"]
+
 
 class LocationModel(BaseModel):
     latitude: float = 0.0
@@ -25,9 +32,12 @@ class LocationModel(BaseModel):
     altitude: Optional[float] = 0.0
     accuracy: Optional[float] = 0.0
 
+
 class BatteryModel(BaseModel):
     level: int = 100
-    charging: bool = False
+    charging: Optional[bool] = False
+    is_charging: Optional[bool] = False
+
 
 class GpsDataModel(BaseModel):
     user_id: str
@@ -36,6 +46,7 @@ class GpsDataModel(BaseModel):
     location: LocationModel
     battery: Optional[BatteryModel] = None
     recorded_at: Optional[str] = None
+
 
 class PoiModel(BaseModel):
     user_id: str
@@ -49,6 +60,7 @@ class PoiModel(BaseModel):
     recorded_at: Optional[str] = None
     photo_base64: Optional[str] = None
 
+
 class PhotoModel(BaseModel):
     user_id: str
     trip_id: str
@@ -57,71 +69,145 @@ class PhotoModel(BaseModel):
     photo_base64: str
     recorded_at: Optional[str] = None
 
+
 @app.get("/")
 def root():
-    return {"status": "SmartTrip API running", "version": "1.0"}
+    return {
+        "status": "SmartTrip API running",
+        "version": "1.0",
+        "database": "travel_tracker"
+    }
+
 
 @app.post("/gps")
 def save_gps(data: GpsDataModel):
     doc = data.dict()
     doc["received_at"] = datetime.utcnow().isoformat()
+
     result = db["gps_logs"].insert_one(doc)
-    return {"status": "ok", "id": str(result.inserted_id)}
+
+    return {
+        "status": "ok",
+        "id": str(result.inserted_id)
+    }
+
 
 @app.get("/gps/{user_id}")
 def get_gps(user_id: str):
-    return list(db["gps_logs"].find({"user_id": user_id}, {"_id": 0}))
+    return list(
+        db["gps_logs"].find(
+            {"user_id": user_id},
+            {"_id": 0}
+        )
+    )
+
 
 @app.post("/poi")
 def save_poi(data: PoiModel):
     doc = data.dict()
     doc["received_at"] = datetime.utcnow().isoformat()
+
     result = db["pois"].insert_one(doc)
-    return {"status": "ok", "id": str(result.inserted_id)}
+
+    return {
+        "status": "ok",
+        "id": str(result.inserted_id)
+    }
+
 
 @app.get("/poi/{user_id}")
 def get_pois(user_id: str):
-    return list(db["pois"].find({"user_id": user_id}, {"_id": 0}))
+    return list(
+        db["pois"].find(
+            {"user_id": user_id},
+            {"_id": 0}
+        )
+    )
+
 
 @app.post("/photo")
 def save_photo(data: PhotoModel):
     doc = data.dict()
     doc["received_at"] = datetime.utcnow().isoformat()
+
     result = db["photos"].insert_one(doc)
-    return {"status": "ok", "id": str(result.inserted_id)}
+
+    return {
+        "status": "ok",
+        "id": str(result.inserted_id)
+    }
+
 
 @app.get("/photos/{user_id}")
 def get_photos(user_id: str):
-    return list(db["photos"].find({"user_id": user_id}, {"_id": 0}))
+    return list(
+        db["photos"].find(
+            {"user_id": user_id},
+            {"_id": 0}
+        )
+    )
+
 
 @app.get("/trip/{trip_id}")
 def get_trip(trip_id: str):
-    gps    = list(db["gps_logs"].find({"trip_id": trip_id}, {"_id": 0}))
-    pois   = list(db["pois"].find({"trip_id": trip_id}, {"_id": 0}))
+    gps = list(db["gps_logs"].find({"trip_id": trip_id}, {"_id": 0}))
+    pois = list(db["pois"].find({"trip_id": trip_id}, {"_id": 0}))
     photos = list(db["photos"].find({"trip_id": trip_id}, {"_id": 0}))
+
     if not gps and not pois and not photos:
         raise HTTPException(status_code=404, detail="Voyage introuvable")
+
     trip_name = ""
-    if gps: trip_name = gps[0].get("trip_name", "")
-    elif pois: trip_name = pois[0].get("trip_name", "")
+
+    if gps:
+        trip_name = gps[0].get("trip_name", "")
+    elif pois:
+        trip_name = pois[0].get("trip_name", "")
+    elif photos:
+        trip_name = photos[0].get("trip_name", "")
+
     return {
-        "trip_id":     trip_id,
-        "trip_name":   trip_name,
-        "gps_count":   len(gps),
-        "poi_count":   len(pois),
+        "trip_id": trip_id,
+        "trip_name": trip_name,
+        "gps_count": len(gps),
+        "poi_count": len(pois),
         "photo_count": len(photos),
-        "pois":        pois,
-        "photos":      [{"location": p["location"], "recorded_at": p.get("recorded_at")} for p in photos]
+        "gps": gps,
+        "pois": pois,
+        "photos": [
+            {
+                "location": p.get("location"),
+                "recorded_at": p.get("recorded_at"),
+                "trip_name": p.get("trip_name", "")
+            }
+            for p in photos
+        ]
     }
+
 
 @app.delete("/trip/{trip_id}")
 def delete_trip(trip_id: str):
     r1 = db["gps_logs"].delete_many({"trip_id": trip_id})
     r2 = db["pois"].delete_many({"trip_id": trip_id})
     r3 = db["photos"].delete_many({"trip_id": trip_id})
+
     return {
-        "status":        "deleted",
-        "gps_deleted":   r1.deleted_count,
-        "poi_deleted":   r2.deleted_count,
+        "status": "deleted",
+        "gps_deleted": r1.deleted_count,
+        "poi_deleted": r2.deleted_count,
         "photo_deleted": r3.deleted_count
+    }
+
+
+# Route de vérification/debug
+@app.get("/debug/counts")
+def debug_counts():
+    return {
+        "database": "travel_tracker",
+        "gps_logs_count": db["gps_logs"].count_documents({}),
+        "gps_logs_amin_count": db["gps_logs"].count_documents({"user_id": "amin"}),
+        "pois_count": db["pois"].count_documents({}),
+        "pois_amin_count": db["pois"].count_documents({"user_id": "amin"}),
+        "photos_count": db["photos"].count_documents({}),
+        "photos_amin_count": db["photos"].count_documents({"user_id": "amin"})
     }
