@@ -20,7 +20,7 @@ MONGODB_URI = os.environ.get("MONGO_URL", "")
 
 client = MongoClient(MONGODB_URI)
 
-# Tes anciens voyages sont dans cette base.
+# Important : tes anciens voyages sont dans cette base.
 db = client["travel_tracker"]
 
 
@@ -69,7 +69,7 @@ class PhotoModel(BaseModel):
     recorded_at: Optional[str] = None
 
     # null = photo libre sur la carte
-    # "poi_..." = photo souvenir rangÃ©e dans ce POI
+    # "poi_..." = photo souvenir liée à un POI précis
     linked_poi_id: Optional[str] = None
 
 
