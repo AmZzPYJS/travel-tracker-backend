@@ -1,20 +1,9 @@
-# ── MODÈLE PHOTO CORRIGÉ ─────────────────────────────────────────────────────
-# Le problème : latitude=-90, longitude=-180 dans MongoDB
-# Cause : PhotoDto côté Android envoie location avec les bonnes valeurs,
-# mais FastAPI utilise les valeurs par défaut si le champ est mal nommé
-# ou si le JSON ne matche pas exactement le modèle Pydantic.
-#
-# Fix : rendre latitude et longitude OBLIGATOIRES (sans valeur par défaut)
-# pour que FastAPI rejette les requêtes sans coordonnées réelles,
-# et ajouter une validation des plages valides.
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel
 from pymongo import MongoClient
 from typing import Optional
 import os
-from bson import ObjectId
 from datetime import datetime
 
 app = FastAPI(title="SmartTrip API")
@@ -30,24 +19,14 @@ client = MongoClient(os.environ.get("MONGODB_URI"))
 db = client["smarttrip"]
 
 # ── MODÈLES ──────────────────────────────────────────────────────────────────
+# Valeurs par défaut permissives — la validation des coordonnées se fait
+# côté Android avant l'envoi, pas côté API (évite les rejets 422)
 
 class LocationModel(BaseModel):
-    latitude: float   # OBLIGATOIRE — plus de valeur par défaut -90
-    longitude: float  # OBLIGATOIRE — plus de valeur par défaut -180
+    latitude: float = 0.0
+    longitude: float = 0.0
     altitude: Optional[float] = 0.0
     accuracy: Optional[float] = 0.0
-
-    @validator('latitude')
-    def validate_lat(cls, v):
-        if v < -85 or v > 85:
-            raise ValueError(f"Latitude invalide: {v}")
-        return v
-
-    @validator('longitude')
-    def validate_lng(cls, v):
-        if v < -180 or v > 180:
-            raise ValueError(f"Longitude invalide: {v}")
-        return v
 
 class BatteryModel(BaseModel):
     level: int = 100
@@ -77,7 +56,7 @@ class PhotoModel(BaseModel):
     user_id: str
     trip_id: str
     trip_name: Optional[str] = ""
-    location: LocationModel   # COORDONNÉES RÉELLES OBLIGATOIRES
+    location: LocationModel
     photo_base64: str
     recorded_at: Optional[str] = None
 
@@ -87,7 +66,6 @@ class PhotoModel(BaseModel):
 def root():
     return {"status": "SmartTrip API running"}
 
-# GPS
 @app.post("/gps")
 def save_gps(data: GpsDataModel):
     doc = data.dict()
@@ -97,10 +75,8 @@ def save_gps(data: GpsDataModel):
 
 @app.get("/gps/{user_id}")
 def get_gps(user_id: str):
-    docs = list(db["gps_logs"].find({"user_id": user_id}, {"_id": 0}))
-    return docs
+    return list(db["gps_logs"].find({"user_id": user_id}, {"_id": 0}))
 
-# POI
 @app.post("/poi")
 def save_poi(data: PoiModel):
     doc = data.dict()
@@ -110,19 +86,10 @@ def save_poi(data: PoiModel):
 
 @app.get("/poi/{user_id}")
 def get_pois(user_id: str):
-    docs = list(db["pois"].find({"user_id": user_id}, {"_id": 0}))
-    return docs
+    return list(db["pois"].find({"user_id": user_id}, {"_id": 0}))
 
-# Photos
 @app.post("/photo")
 def save_photo(data: PhotoModel):
-    # Vérification supplémentaire des coordonnées
-    lat = data.location.latitude
-    lng = data.location.longitude
-    if lat == 0.0 and lng == 0.0:
-        # Golfe de Guinée — probablement pas de GPS réel
-        # On sauvegarde quand même mais on log
-        print(f"WARNING: Photo avec coords 0,0 pour trip {data.trip_id}")
     doc = data.dict()
     doc["received_at"] = datetime.utcnow().isoformat()
     result = db["photos"].insert_one(doc)
@@ -130,10 +97,8 @@ def save_photo(data: PhotoModel):
 
 @app.get("/photos/{user_id}")
 def get_photos(user_id: str):
-    docs = list(db["photos"].find({"user_id": user_id}, {"_id": 0}))
-    return docs
+    return list(db["photos"].find({"user_id": user_id}, {"_id": 0}))
 
-# Voyage public (QR code)
 @app.get("/trip/{trip_id}")
 def get_trip(trip_id: str):
     gps    = list(db["gps_logs"].find({"trip_id": trip_id}, {"_id": 0}))
@@ -141,26 +106,27 @@ def get_trip(trip_id: str):
     photos = list(db["photos"].find({"trip_id": trip_id}, {"_id": 0}))
     if not gps and not pois and not photos:
         raise HTTPException(status_code=404, detail="Voyage introuvable")
-    trip_name = gps[0].get("trip_name", "") if gps else (pois[0].get("trip_name", "") if pois else "")
+    trip_name = ""
+    if gps: trip_name = gps[0].get("trip_name", "")
+    elif pois: trip_name = pois[0].get("trip_name", "")
     return {
-        "trip_id":   trip_id,
-        "trip_name": trip_name,
-        "gps_count": len(gps),
-        "poi_count": len(pois),
+        "trip_id":     trip_id,
+        "trip_name":   trip_name,
+        "gps_count":   len(gps),
+        "poi_count":   len(pois),
         "photo_count": len(photos),
-        "pois":   pois,
-        "photos": [{"location": p["location"], "recorded_at": p.get("recorded_at")} for p in photos]
+        "pois":        pois,
+        "photos":      [{"location": p["location"], "recorded_at": p.get("recorded_at")} for p in photos]
     }
 
-# Suppression voyage
 @app.delete("/trip/{trip_id}")
 def delete_trip(trip_id: str):
     r1 = db["gps_logs"].delete_many({"trip_id": trip_id})
     r2 = db["pois"].delete_many({"trip_id": trip_id})
     r3 = db["photos"].delete_many({"trip_id": trip_id})
     return {
-        "status": "deleted",
-        "gps_deleted": r1.deleted_count,
-        "poi_deleted": r2.deleted_count,
+        "status":        "deleted",
+        "gps_deleted":   r1.deleted_count,
+        "poi_deleted":   r2.deleted_count,
         "photo_deleted": r3.deleted_count
     }
