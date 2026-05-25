@@ -15,7 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MONGODB_URI = os.environ.get("MONGODB_URI", "")
+MONGODB_URI = os.environ.get("MONGO_URL", "")
 client = MongoClient(MONGODB_URI)
 db = client["smarttrip"]
 
